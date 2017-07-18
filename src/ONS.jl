@@ -74,7 +74,8 @@ function Base.display(r::MetaData)
 end
 
 function Base.display(R::Vector{MetaData})
-    for r in R
+    for (i, r) in enumerate(R)
+        println("$i.")
         display(r)
         println()
     end
@@ -100,7 +101,7 @@ function Base.display(R::Records)
     println()
     display(R.items)
 end
-
+Base.getindex(R::Records, i) = R.items[i]
 
 struct Period
     date::String
@@ -166,6 +167,35 @@ Data(d::Dict) = Data(
     haskey(d, "description") ? MetaDataDescription(d["description"]) : empty(MetaDataDescription),
 )
 
+function Base.display(d::Data)
+    display(d.description.title)
+    if !isempty(d.years)
+        println("  Annual data from $(first(d.years).year) to $(last(d.years).year)")
+    end
+    if !isempty(d.quarters)
+        println("  Quarterly data from $(first(d.quarters).year):$(first(d.quarters).quarter) to $(last(d.quarters).year):$(last(d.quarters).quarter)")
+    end
+    if !isempty(d.months)
+        println("  Quarterly data from $(first(d.months).year):$(first(d.months).month) to $(last(d.months).year):$(last(d.months).month)")
+    end
+end
+
+function Base.getindex(d::Data, freq::Symbol)
+    if freq == :yearly
+        return [parse(x.value) for x in d.years]
+    elseif freq == :years
+        return [parse(x.year) for x in d.years]
+    elseif freq == :quarterly
+        return [parse(x.value) for x in d.quarters]
+    elseif freq == :quarterly
+        return [parse(x.value) for x in d.quarters]
+    elseif freq == :monthly
+        return [parse(x.value) for x in d.months]
+    else
+        return Float64[]
+    end
+end
+
 empty(::Type{Int}) = typemin(Int)
 empty(::Type{Bool}) = false
 empty(::Type{String}) = ""
@@ -194,15 +224,12 @@ function list_timeseries(start = 0)
     return Records(d)
 end
 
-function search_datasets(q)
-    req = get("https://api.ons.gov.uk/search?q=$q")
+function search_datasets(q, start = 0)
+    q = replace(q, " ", "+")
+    req = get("https://api.ons.gov.uk/search?q=$q&limit=100&start=$(start*100)")
     d = JSON.Parser.parse(String(req.data))
     return Records(d)
 end
-
-
-
-
 
 function get_dataset(q)
     req = get("https://api.ons.gov.uk/dataset/$q/timeseries")
@@ -217,7 +244,7 @@ function get_dataset(md::MetaData)
     end
 end
 
-function get_timeseries(md::MetaData)
+function get_data(md::MetaData)
     dataset = md.description.datasetId
     timeseries = md.description.cdid
     req = get("https://api.ons.gov.uk/dataset/$dataset/timeseries/$timeseries/data")
@@ -225,4 +252,5 @@ function get_timeseries(md::MetaData)
     return Data(d)
 end
 
+export search_datasets, list_datasets, list_timeseries, get_dataset, get_data
 end
