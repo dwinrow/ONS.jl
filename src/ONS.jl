@@ -1,14 +1,18 @@
 module ONS
-using JSON, Requests
+
+using JSON, HTTP
+import Base:empty
 
 struct Contact
     email::String
     name::String
     telephone::String
 end
-Contact(d::Dict) = Contact(get(d, "email", ""), 
-get(d, "name", ""), 
-get(d, "telephone", ""))
+Contact(d::Dict) = Contact(
+    get(d, "email", ""), 
+    get(d, "name", ""), 
+    get(d, "telephone", "")
+)
 
 struct MetaDataDescription
     title::String
@@ -37,7 +41,7 @@ MetaDataDescription(d::Dict) = MetaDataDescription(
     get(d, "keywords", []), 
     get(d, "metaDescription", ""), 
     get(d, "nationalStatistics", false), 
-    haskey(d, "contact") ? Contact(d["contact"]) :  empty(Contact),
+    haskey(d, "contact") ? Contact(d["contact"]) : empty(Contact),
     get(d, "releaseDate", ""),     
     get(d, "nextRelease", ""),
     get(d, "edition", ""), 
@@ -52,7 +56,6 @@ MetaDataDescription(d::Dict) = MetaDataDescription(
     get(d, "keyNote", ""), 
     get(d, "sampleSize", "")
 )
-
 
 struct MetaData
     uri::String
@@ -81,7 +84,6 @@ function Base.display(R::Vector{MetaData})
     end
 end
 
-
 struct Records
     items::Vector{MetaData}
     itemsPerPage::Int
@@ -97,7 +99,7 @@ Records(d::Dict) = Records(
 
 function Base.display(R::Records)
     println("Total items: ", R.totalItems)
-    println("Displaying: ", R.startIndex + (1:R.itemsPerPage))
+    println("Displaying: ", R.startIndex .+ (1:R.itemsPerPage))
     println()
     display(R.items)
 end
@@ -176,7 +178,7 @@ function Base.display(d::Data)
         println("  Quarterly data from $(first(d.quarters).year):$(first(d.quarters).quarter) to $(last(d.quarters).year):$(last(d.quarters).quarter)")
     end
     if !isempty(d.months)
-        println("  Quarterly data from $(first(d.months).year):$(first(d.months).month) to $(last(d.months).year):$(last(d.months).month)")
+        println("  Monthly data from $(first(d.months).year):$(first(d.months).month) to $(last(d.months).year):$(last(d.months).month)")
     end
 end
 
@@ -202,40 +204,89 @@ empty(::Type{String}) = ""
 empty(::Type{Vector{T}}) where T = T[]
 
 for t in (Records, MetaData, Contact, MetaDataDescription, Period, Version, Data)
+    tn = split("$t",".")[end]
     sig = :(empty(::Type{$t}))
-    body = :($(Symbol(t))())
-    for i = 1:nfields(t)
-        fname = fieldname(t, i)
-        ftype = fieldtype(t, i)
+    body = :($(Symbol(tn))()) #Had to change this so it only gives the last part of the type otherwise it can't find the method
+    for (fname,ftype) in zip(fieldnames(t),fieldtypes(t)) 
         push!(body.args, :(empty($ftype)))
     end
     @eval $sig = $body
 end
 
-function list_datasets()
-    req = get("https://api.ons.gov.uk/dataset")
-    d = JSON.Parser.parse(String(req.data))
-    return Records(d)
+#endpoints
+"""
+    addparams(url,parameters)
+Utility function to convert dictionary of parameters to string for URL
+"""
+addparams(url,parameters) = url*dict_to_query(parameters)
+function dict_to_query(dict)
+    params = ""
+    if length(dict) > 0
+        params = "?"*join(keys(dict).*"=".*string.(values(dict)),"&")
+    end
+    params
 end
 
-function list_timeseries(start = 0)
-    req = get("https://api.ons.gov.uk/timeseries?start=$start&limit=100")
-    d = JSON.Parser.parse(String(req.data))
-    return Records(d)
+"""
+    getjson(command,parameters)
+Access the ONS API
+"""
+function getjson(command,parameters=Dict())
+    url = "https://api.ons.gov.uk/"
+    fullurl = addparams(url*command,parameters)
+    @info fullurl
+    r = HTTP.request("GET",fullurl)
+    JSON.parse(String(r.body))
 end
 
-function search_datasets(q, start = 0)
-    q = replace(q, " ", "+")
-    req = get("https://api.ons.gov.uk/search?q=$q&limit=100&start=$(start*100)")
-    d = JSON.Parser.parse(String(req.data))
-    return Records(d)
+"""
+    list_datasets(start=0, limit=100)
+List the datasets from ONS.
+This is unlikely to be useful since there are 9000+ datasets.
+Many of them don't return a readable description and just a uri to the ONS page.
+"""
+function list_datasets(start=0, limit=100)
+    parameters = Dict(
+        "start" => start,
+        "limit" => limit
+    )
+    Records(getjson("dataset",parameters))
 end
 
-function get_dataset(q)
-    req = get("https://api.ons.gov.uk/dataset/$q/timeseries")
-    d = JSON.Parser.parse(String(req.data))
-    return Records(d)
+"""
+    list_timeseries(start=0, limit=100)
+List the datasets from ONS.
+Although this returns 53,000+ records, it is more useful than list_datasets
+since it returns descriptions as well as the dataset and timeseries codes
+which can be used to retrieve the data with `get_data`.
+"""
+function list_timeseries(start=0, limit=100)
+    parameters = Dict(
+        "start" => start,
+        "limit" => limit
+    )
+    Records(getjson("timeseries",parameters))
 end
+
+"""
+    search_timeseries(q, start=0, limit=100)
+This is the most useful for finding the timeseries you need.
+The search query `q` is important to narrow down the results.
+"""
+function search_timeseries(q, start=0, limit=100)
+    parameters = Dict(
+        "q" => q,
+        "start" => start,
+        "limit" => limit
+    )
+    Records(getjson("search",parameters))
+end
+
+"""
+    get_dataset(dataset)
+Can be used to get a list of the timeseries from a dataset name
+"""
+get_dataset(dataset) = Records(getjson("dataset/$dataset/timeseries"))
 function get_dataset(md::MetaData)
     if !isempty(md.description.datasetId)
         get_dataset(md.description.datasetId)
@@ -244,13 +295,18 @@ function get_dataset(md::MetaData)
     end
 end
 
+"""
+    get_data(dataset,timeseries)
+Given a dataset and timeseries, is used to get the data which returns months, quarters and years
+as well as all of the metadata.
+"""
+get_data(dataset,timeseries) = Data(getjson("dataset/$dataset/timeseries/$timeseries/data"))
 function get_data(md::MetaData)
     dataset = md.description.datasetId
     timeseries = md.description.cdid
-    req = get("https://api.ons.gov.uk/dataset/$dataset/timeseries/$timeseries/data")
-    d = JSON.Parser.parse(String(req.data))
-    return Data(d)
+    get_data(dataset,timeseries)
 end
 
-export search_datasets, list_datasets, list_timeseries, get_dataset, get_data
+export search_timeseries, list_datasets, list_timeseries, get_dataset, get_data
+
 end
