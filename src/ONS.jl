@@ -214,28 +214,16 @@ for t in (Records, MetaData, Contact, MetaDataDescription, Period, Version, Data
 end
 
 #endpoints
-"""
-    addparams(url,parameters)
-Utility function to convert dictionary of parameters to string for URL
-"""
-addparams(url,parameters) = url*dict_to_query(parameters)
-function dict_to_query(dict)
-    params = ""
-    if length(dict) > 0
-        params = "?"*join(keys(dict).*"=".*string.(values(dict)),"&")
-    end
-    params
-end
+
 
 """
     getjson(command,parameters)
 Access the ONS API
 """
-function getjson(command,parameters=Dict())
+function getjson(command,parameters=nothing)
     url = "https://api.ons.gov.uk/"
-    fullurl = addparams(url*command,parameters)
-    @info fullurl
-    r = HTTP.request("GET",fullurl)
+    r = HTTP.request("GET",url*command,query=parameters)
+    @info url*r.request.target
     JSON.parse(String(r.body))
 end
 
